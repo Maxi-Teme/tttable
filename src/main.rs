@@ -7,7 +7,8 @@ mod tt;
 
 const GAMES_TOTAL: usize = 10usize.pow(5);
 const PLAYERS: [usize; 3] = [0, 1, 2];
-const MATCHES: [(usize, usize); 6] = [(0, 1), (0, 2), (1, 0), (1, 2), (2, 0), (2, 1)];
+const MATCHES: [(usize, usize); 6] =
+    [(0, 1), (0, 2), (1, 0), (1, 2), (2, 0), (2, 1)];
 
 fn main() {
     env_logger::init();
@@ -16,29 +17,40 @@ fn main() {
     let mut random_generator = rand::thread_rng();
 
     let starttime = Instant::now(); // bench
-
     for _ in 0..GAMES_TOTAL {
         let game = MATCHES
             .choose(&mut random_generator)
             .expect("MATCHES is not empty");
 
-        playthrough.play_match_if_possible(*game)
+        playthrough.play_match_if_possible(*game, true)
     }
-
-    // (0..GAMES_TOTAL)
-    //     .map(|_| MATCHES.choose(&mut random_generator))
-    //     .for_each(|game| {
-    //         playthrough.play_match_if_possible(*game.expect("MATCHES is not empty"))
-    //     });
-
     let elapsed = starttime.elapsed(); // bench
 
     playthrough.log_matches_so_far();
 
-    log::info!(
+    println!(
+        "Loop execution took: {:.2?} generating {} random games without rule 4",
+        elapsed, GAMES_TOTAL
+    ); // bench
+
+    // without applying rule 4 (disallow playing on the same site when facing the same opponent again)
+    playthrough.clear_match_history();
+    println!("\n\nRunning with rule 4 applied\n");
+    let starttime = Instant::now(); // bench
+    for _ in 0..GAMES_TOTAL {
+        let game = MATCHES
+            .choose(&mut random_generator)
+            .expect("MATCHES is not empty");
+
+        playthrough.play_match_if_possible(*game, false)
+    }
+    let elapsed = starttime.elapsed(); // bench
+
+    playthrough.log_matches_so_far();
+
+    println!(
         "Loop execution took: {:.2?} generating {} random games",
-        elapsed,
-        GAMES_TOTAL
+        elapsed, GAMES_TOTAL
     ); // bench
 }
 

@@ -14,14 +14,11 @@ impl TtMatch {
         Self { left, right }
     }
 
-    pub fn check_same_players(&self, player1: &usize, player2: &usize) -> bool {
+    pub fn check_same_players(&self, players: (usize, usize)) -> bool {
         let players_in_match = [self.left, self.right];
 
-        if players_in_match.contains(player1) && players_in_match.contains(player2) {
-            false
-        } else {
-            true
-        }
+        players_in_match.contains(&players.0)
+            && players_in_match.contains(&players.1)
     }
 }
 
@@ -42,7 +39,10 @@ impl TtPlaythrough {
     //
     // construction and control
     //
-    pub fn new(players: Vec<usize>, max_repeting_games_per_player: usize) -> Self {
+    pub fn new(
+        players: Vec<usize>,
+        max_repeting_games_per_player: usize,
+    ) -> Self {
         Self {
             max_repeting_games_per_player,
             players,
@@ -63,24 +63,39 @@ impl TtPlaythrough {
         );
     }
 
+    pub fn clear_match_history(&mut self) {
+        self.matches = vec![];
+    }
+
     //
     // public interface
     //
-    pub fn play_match_if_possible(&mut self, players: (usize, usize)) {
-        if self.check_match_possible(players) {
+    pub fn play_match_if_possible(
+        &mut self,
+        players: (usize, usize),
+        allow_rule_4: bool,
+    ) {
+        if self.check_match_possible(players, allow_rule_4) {
             self.append_game(players.0, players.1);
         }
     }
 
-    pub fn check_match_possible(&mut self, players: (usize, usize)) -> bool {
+    pub fn check_match_possible(
+        &mut self,
+        players: (usize, usize),
+        allow_rule_4: bool,
+    ) -> bool {
         // Rule 1: don't play same players
-        self.check_same_players_as_before(players)
+        !self.check_same_players_as_before(players)
 
             // Rule 2: don't play three times in a row
             && self.check_not_played_twice_before(players)
 
-            // Rule 3: don't play on the same side of the table
-            && self.check_correct_side_of_table(players)
+            // Rule 3: don't play on the same side of the table as in the game before
+            && self.check_not_on_same_side_as_one_game_before(players)
+
+            // Rule 4: don't play on the same sides when facing the same opponent again
+            && (allow_rule_4 || self.check_not_on_same_sides_facing_the_same_opponent_again(players))
     }
 
     //
@@ -90,9 +105,9 @@ impl TtPlaythrough {
     /// Rule 1: don't play same players
     fn check_same_players_as_before(&self, players: (usize, usize)) -> bool {
         if let Some(last_match) = self.matches.last() {
-            last_match.check_same_players(&players.0, &players.1)
+            last_match.check_same_players(players)
         } else {
-            true
+            false
         }
     }
 
@@ -133,12 +148,37 @@ impl TtPlaythrough {
         true
     }
 
-    /// Rule 3: don't play on the same side of the table
-    fn check_correct_side_of_table(&self, players: (usize, usize)) -> bool {
+    /// Rule 3: don't play on the same side of the table as in the game before
+    fn check_not_on_same_side_as_one_game_before(
+        &self,
+        players: (usize, usize),
+    ) -> bool {
         if let Some(last_match) = self.matches.last() {
             if last_match.left == players.0 {
                 return false;
             } else if last_match.right == players.1 {
+                return false;
+            }
+        };
+
+        true
+    }
+
+    /// Rule 4: don't play on the same sides when facing the same opponent again
+    fn check_not_on_same_sides_facing_the_same_opponent_again(
+        &self,
+        players: (usize, usize),
+    ) -> bool {
+        let matches_reversed = self.get_matches_reversed();
+
+        let last_match = matches_reversed
+            .into_iter()
+            .find(|m| m.check_same_players(players));
+
+        if let Some(found_match) = last_match {
+            if found_match.left == players.0 {
+                return false;
+            } else if found_match.right == players.1 {
                 return false;
             }
         };
@@ -179,6 +219,13 @@ impl TtPlaythrough {
         last_n
     }
 
+    fn get_matches_reversed(&self) -> Vec<TtMatch> {
+        let mut matches = self.matches.clone();
+        matches.reverse();
+
+        matches
+    }
+
     /// key is the player and value can be used to count
     fn get_empty_player_map(&self) -> BTreeMap<usize, usize> {
         let mut players_map: BTreeMap<usize, usize> = BTreeMap::new();
@@ -205,12 +252,12 @@ mod tests {
     fn test_forbit_same_players() {
         let tt_match = TtMatch::new(1, 2);
 
-        assert_eq!(tt_match.check_same_players(&0, &1), true);
-        assert_eq!(tt_match.check_same_players(&0, &2), true);
-        assert_eq!(tt_match.check_same_players(&1, &0), true);
-        assert_eq!(tt_match.check_same_players(&2, &0), true);
-        assert_eq!(tt_match.check_same_players(&1, &2), false);
-        assert_eq!(tt_match.check_same_players(&2, &1), false);
+        assert_eq!(tt_match.check_same_players((0, 1)), false);
+        assert_eq!(tt_match.check_same_players((0, 2)), false);
+        assert_eq!(tt_match.check_same_players((1, 0)), false);
+        assert_eq!(tt_match.check_same_players((2, 0)), false);
+        assert_eq!(tt_match.check_same_players((1, 2)), true);
+        assert_eq!(tt_match.check_same_players((2, 1)), true);
     }
 
     #[test]
@@ -280,33 +327,117 @@ mod tests {
     }
 
     #[test]
+    fn test_get_matches_reversed() {
+        let mut playthrough = TtPlaythrough::new(TEST_PLAYERS.into(), 2);
+
+        playthrough.append_game(0, 1);
+        playthrough.append_game(0, 2);
+        playthrough.append_game(1, 2);
+
+        let manually_reversed =
+            vec![TtMatch::new(1, 2), TtMatch::new(0, 2), TtMatch::new(0, 1)];
+
+        assert_eq!(playthrough.get_matches_reversed(), manually_reversed);
+
+        playthrough.append_game(0, 1);
+        let manually_reversed = vec![
+            TtMatch::new(0, 1),
+            TtMatch::new(1, 2),
+            TtMatch::new(0, 2),
+            TtMatch::new(0, 1),
+        ];
+
+        assert_eq!(playthrough.get_matches_reversed(), manually_reversed);
+    }
+
+    #[test]
     fn test_check_same_players_as_before() {
         let mut playthrough = TtPlaythrough::new(TEST_PLAYERS.into(), 2);
 
         playthrough.append_game(0, 1);
         playthrough.append_game(0, 2);
 
-        assert_eq!(playthrough.check_same_players_as_before((0, 1)), true);
-        assert_eq!(playthrough.check_same_players_as_before((0, 2)), false);
-        assert_eq!(playthrough.check_same_players_as_before((1, 0)), true);
-        assert_eq!(playthrough.check_same_players_as_before((2, 0)), false);
-        assert_eq!(playthrough.check_same_players_as_before((1, 2)), true);
-        assert_eq!(playthrough.check_same_players_as_before((2, 1)), true);
+        assert_eq!(playthrough.check_same_players_as_before((0, 1)), false);
+        assert_eq!(playthrough.check_same_players_as_before((0, 2)), true);
+        assert_eq!(playthrough.check_same_players_as_before((1, 0)), false);
+        assert_eq!(playthrough.check_same_players_as_before((2, 0)), true);
+        assert_eq!(playthrough.check_same_players_as_before((1, 2)), false);
+        assert_eq!(playthrough.check_same_players_as_before((2, 1)), false);
     }
 
     #[test]
-    fn test_correct_side_of_table() {
+    fn test_check_not_on_same_side_as_one_game_before() {
         let mut playthrough = TtPlaythrough::new(TEST_PLAYERS.into(), 2);
 
         playthrough.append_game(0, 1);
         playthrough.append_game(0, 2);
 
-        assert_eq!(playthrough.check_correct_side_of_table((0, 1)), false);
-        assert_eq!(playthrough.check_correct_side_of_table((0, 2)), false);
-        assert_eq!(playthrough.check_correct_side_of_table((1, 0)), true);
-        assert_eq!(playthrough.check_correct_side_of_table((2, 0)), true);
-        assert_eq!(playthrough.check_correct_side_of_table((1, 2)), false);
-        assert_eq!(playthrough.check_correct_side_of_table((2, 1)), true);
+        assert_eq!(
+            playthrough.check_not_on_same_side_as_one_game_before((0, 1)),
+            false
+        );
+        assert_eq!(
+            playthrough.check_not_on_same_side_as_one_game_before((0, 2)),
+            false
+        );
+        assert_eq!(
+            playthrough.check_not_on_same_side_as_one_game_before((1, 0)),
+            true
+        );
+        assert_eq!(
+            playthrough.check_not_on_same_side_as_one_game_before((2, 0)),
+            true
+        );
+        assert_eq!(
+            playthrough.check_not_on_same_side_as_one_game_before((1, 2)),
+            false
+        );
+        assert_eq!(
+            playthrough.check_not_on_same_side_as_one_game_before((2, 1)),
+            true
+        );
+    }
+
+    #[test]
+    fn test_check_not_on_same_sides_facing_the_same_opponent_again() {
+        let mut playthrough = TtPlaythrough::new(TEST_PLAYERS.into(), 2);
+
+        playthrough.append_game(0, 1);
+        playthrough.append_game(0, 2);
+        playthrough.append_game(2, 1);
+        playthrough.append_game(1, 0);
+        playthrough.append_game(2, 0);
+
+        assert_eq!(
+            playthrough
+                .check_not_on_same_sides_facing_the_same_opponent_again((0, 1)),
+            true
+        );
+        assert_eq!(
+            playthrough
+                .check_not_on_same_sides_facing_the_same_opponent_again((0, 2)),
+            true
+        );
+        assert_eq!(
+            playthrough
+                .check_not_on_same_sides_facing_the_same_opponent_again((1, 0)),
+            false
+        );
+        assert_eq!(
+            playthrough
+                .check_not_on_same_sides_facing_the_same_opponent_again((2, 0)),
+            false
+        );
+        assert_eq!(
+            playthrough
+                .check_not_on_same_sides_facing_the_same_opponent_again((1, 2)),
+            true
+        );
+        assert_eq!(
+            playthrough
+                .check_not_on_same_sides_facing_the_same_opponent_again((2, 1)),
+            false
+        );
     }
 
     #[test]
@@ -334,38 +465,74 @@ mod tests {
     }
 
     #[test]
-    fn test_check_matches_possible() {
+    fn test_check_matches_possible_with_rule_4() {
         let mut playthrough = TtPlaythrough::new(TEST_PLAYERS.into(), 2);
 
-        assert_eq!(playthrough.check_match_possible((0, 1)), true);
-        assert_eq!(playthrough.check_match_possible((0, 2)), true);
-        assert_eq!(playthrough.check_match_possible((1, 0)), true);
-        assert_eq!(playthrough.check_match_possible((2, 0)), true);
-        assert_eq!(playthrough.check_match_possible((1, 2)), true);
-        assert_eq!(playthrough.check_match_possible((2, 1)), true);
+        assert_eq!(playthrough.check_match_possible((0, 1), false), true);
+        assert_eq!(playthrough.check_match_possible((0, 2), false), true);
+        assert_eq!(playthrough.check_match_possible((1, 0), false), true);
+        assert_eq!(playthrough.check_match_possible((2, 0), false), true);
+        assert_eq!(playthrough.check_match_possible((1, 2), false), true);
+        assert_eq!(playthrough.check_match_possible((2, 1), false), true);
 
         playthrough.append_game(2, 1);
-        assert_eq!(playthrough.check_match_possible((0, 1)), false); // same side
-        assert_eq!(playthrough.check_match_possible((0, 2)), true);
-        assert_eq!(playthrough.check_match_possible((1, 0)), true);
-        assert_eq!(playthrough.check_match_possible((2, 0)), false); // same side
-        assert_eq!(playthrough.check_match_possible((1, 2)), false); // same players
-        assert_eq!(playthrough.check_match_possible((2, 1)), false); // same players
+        assert_eq!(playthrough.check_match_possible((0, 1), false), false); // same side
+        assert_eq!(playthrough.check_match_possible((0, 2), false), true);
+        assert_eq!(playthrough.check_match_possible((1, 0), false), true);
+        assert_eq!(playthrough.check_match_possible((2, 0), false), false); // same side
+        assert_eq!(playthrough.check_match_possible((1, 2), false), false); // same players
+        assert_eq!(playthrough.check_match_possible((2, 1), false), false); // same players
 
         playthrough.append_game(0, 2);
-        assert_eq!(playthrough.check_match_possible((0, 1)), false); // same side
-        assert_eq!(playthrough.check_match_possible((0, 2)), false); // same players
-        assert_eq!(playthrough.check_match_possible((1, 0)), true);
-        assert_eq!(playthrough.check_match_possible((2, 0)), false); // same players
-        assert_eq!(playthrough.check_match_possible((1, 2)), false); // same side
-        assert_eq!(playthrough.check_match_possible((2, 1)), false); // played twice alredy
+        assert_eq!(playthrough.check_match_possible((0, 1), false), false); // same side
+        assert_eq!(playthrough.check_match_possible((0, 2), false), false); // same players
+        assert_eq!(playthrough.check_match_possible((1, 0), false), true);
+        assert_eq!(playthrough.check_match_possible((2, 0), false), false); // same players
+        assert_eq!(playthrough.check_match_possible((1, 2), false), false); // same side
+        assert_eq!(playthrough.check_match_possible((2, 1), false), false); // played twice already
 
         playthrough.append_game(1, 0);
-        assert_eq!(playthrough.check_match_possible((0, 1)), false);
-        assert_eq!(playthrough.check_match_possible((0, 2)), false);
-        assert_eq!(playthrough.check_match_possible((1, 0)), false);
-        assert_eq!(playthrough.check_match_possible((2, 0)), false);
-        assert_eq!(playthrough.check_match_possible((1, 2)), false);
-        assert_eq!(playthrough.check_match_possible((2, 1)), true);
+        assert_eq!(playthrough.check_match_possible((0, 1), false), false); // same players
+        assert_eq!(playthrough.check_match_possible((0, 2), false), false); // played twice already
+        assert_eq!(playthrough.check_match_possible((1, 0), false), false); // same players
+        assert_eq!(playthrough.check_match_possible((2, 0), false), false); // played twice already
+        assert_eq!(playthrough.check_match_possible((1, 2), false), false); // same side
+        assert_eq!(playthrough.check_match_possible((2, 1), false), false); // same side facing same opponent
+    }
+
+    #[test]
+    fn test_check_matches_possible_without_rule_4() {
+        let mut playthrough = TtPlaythrough::new(TEST_PLAYERS.into(), 2);
+
+        assert_eq!(playthrough.check_match_possible((0, 1), true), true);
+        assert_eq!(playthrough.check_match_possible((0, 2), true), true);
+        assert_eq!(playthrough.check_match_possible((1, 0), true), true);
+        assert_eq!(playthrough.check_match_possible((2, 0), true), true);
+        assert_eq!(playthrough.check_match_possible((1, 2), true), true);
+        assert_eq!(playthrough.check_match_possible((2, 1), true), true);
+
+        playthrough.append_game(2, 1);
+        assert_eq!(playthrough.check_match_possible((0, 1), true), false); // same side
+        assert_eq!(playthrough.check_match_possible((0, 2), true), true);
+        assert_eq!(playthrough.check_match_possible((1, 0), true), true);
+        assert_eq!(playthrough.check_match_possible((2, 0), true), false); // same side
+        assert_eq!(playthrough.check_match_possible((1, 2), true), false); // same players
+        assert_eq!(playthrough.check_match_possible((2, 1), true), false); // same players
+
+        playthrough.append_game(0, 2);
+        assert_eq!(playthrough.check_match_possible((0, 1), true), false); // same side
+        assert_eq!(playthrough.check_match_possible((0, 2), true), false); // same players
+        assert_eq!(playthrough.check_match_possible((1, 0), true), true);
+        assert_eq!(playthrough.check_match_possible((2, 0), true), false); // same players
+        assert_eq!(playthrough.check_match_possible((1, 2), true), false); // same side
+        assert_eq!(playthrough.check_match_possible((2, 1), true), false); // played twice already
+
+        playthrough.append_game(1, 0);
+        assert_eq!(playthrough.check_match_possible((0, 1), true), false); // same players
+        assert_eq!(playthrough.check_match_possible((0, 2), true), false); // played twice already
+        assert_eq!(playthrough.check_match_possible((1, 0), true), false); // same players
+        assert_eq!(playthrough.check_match_possible((2, 0), true), false); // played twice already
+        assert_eq!(playthrough.check_match_possible((1, 2), true), false); // same side
+        assert_eq!(playthrough.check_match_possible((2, 1), true), true);
     }
 }
