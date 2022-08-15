@@ -17,7 +17,6 @@ fn main() {
 
     let starttime = Instant::now(); // bench
 
-    // takes 22s with 50.000 games
     for _ in 0..GAMES_TOTAL {
         let game = MATCHES
             .choose(&mut random_generator)
@@ -26,7 +25,6 @@ fn main() {
         playthrough.play_match_if_possible(*game)
     }
 
-    // // takes 22 with 50.000 games
     // (0..GAMES_TOTAL)
     //     .map(|_| MATCHES.choose(&mut random_generator))
     //     .for_each(|game| {

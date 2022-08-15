@@ -56,7 +56,7 @@ impl TtPlaythrough {
             .iter()
             .fold("".to_string(), |acc, m| acc + &format!("{m}\n"));
 
-        log::info!(
+        println!(
             "MATCHES: \n{}\n\ntotal: {}",
             formatted_matches,
             self.matches.len()
