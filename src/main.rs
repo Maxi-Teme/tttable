@@ -1,37 +1,65 @@
-use std::collections::HashMap;
+use rand::seq::SliceRandom;
+use std::time::Instant;
 
 use tt::TtPlaythrough;
 
 mod tt;
 
+const GAMES_TOTAL: usize = 10usize.pow(5);
 const PLAYERS: [usize; 3] = [0, 1, 2];
+const MATCHES: [(usize, usize); 6] = [(0, 1), (0, 2), (1, 0), (1, 2), (2, 0), (2, 1)];
 
 fn main() {
     env_logger::init();
 
     let mut playthrough = TtPlaythrough::new(PLAYERS.into(), 2);
+    let mut random_generator = rand::thread_rng();
 
-    for _ in 0..10 {
-        if let Err(err) = playthrough.get_next_match() {
-            log::error!("{err}")
-        };
+    let starttime = Instant::now(); // bench
+
+    // takes 22s with 50.000 games
+    for _ in 0..GAMES_TOTAL {
+        let game = MATCHES
+            .choose(&mut random_generator)
+            .expect("MATCHES is not empty");
+
+        playthrough.play_match_if_possible(*game)
     }
 
-    log::info!("{:#?}", playthrough.matches);
+    // // takes 22 with 50.000 games
+    // (0..GAMES_TOTAL)
+    //     .map(|_| MATCHES.choose(&mut random_generator))
+    //     .for_each(|game| {
+    //         playthrough.play_match_if_possible(*game.expect("MATCHES is not empty"))
+    //     });
 
-    playthrough.check_match_possible((1, 0));
+    let elapsed = starttime.elapsed(); // bench
 
-    let mut hash_map = HashMap::new();
+    playthrough.log_matches_so_far();
 
-    hash_map.insert(1, 2);
-    hash_map.insert(2, 1);
-    hash_map.insert(1, 0);
+    log::info!(
+        "Loop execution took: {:.2?} generating {} random games",
+        elapsed,
+        GAMES_TOTAL
+    ); // bench
 }
 
-// sanity checks
+// sanity checks lol
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;
+
+    #[test]
+    fn test_vec_first_last() {
+        let mut list = vec![1, 2, 3];
+
+        assert_eq!(list.first(), Some(&1));
+        assert_eq!(list.last(), Some(&3));
+
+        list.push(4);
+        assert_eq!(list.first(), Some(&1));
+        assert_eq!(list.last(), Some(&4));
+    }
 
     #[test]
     fn test_hash_map_insert_updates() {

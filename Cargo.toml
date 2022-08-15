@@ -8,4 +8,4 @@ edition = "2021"
 log = "*"
 env_logger = "*"
 itertools = "0.10.3"
-rand = "0.8.5"
+rand = { version = "0.8.5", features = ["alloc"] }

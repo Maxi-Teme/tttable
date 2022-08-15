@@ -1,12 +1,12 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
+use std::fmt;
 
 use itertools::Itertools;
-use rand::Rng;
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct TtMatch {
-    pub left: usize,
-    pub right: usize,
+    left: usize,
+    right: usize,
 }
 
 impl TtMatch {
@@ -14,29 +14,34 @@ impl TtMatch {
         Self { left, right }
     }
 
-    pub fn forbit_same_players(
-        &self,
-        player1: &usize,
-        player2: &usize,
-    ) -> Result<(), String> {
+    pub fn check_same_players(&self, player1: &usize, player2: &usize) -> bool {
         let players_in_match = [self.left, self.right];
 
         if players_in_match.contains(player1) && players_in_match.contains(player2) {
-            Err("Same players in match!".to_string())
+            false
         } else {
-            Ok(())
+            true
         }
+    }
+}
+
+impl fmt::Display for TtMatch {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "| {} - {} |", self.left, self.right)
     }
 }
 
 #[derive(Debug, Clone)]
 pub struct TtPlaythrough {
     max_repeting_games_per_player: usize,
-    pub players: Vec<usize>,
-    pub matches: Vec<TtMatch>,
+    players: Vec<usize>,
+    matches: Vec<TtMatch>,
 }
 
 impl TtPlaythrough {
+    //
+    // construction and control
+    //
     pub fn new(players: Vec<usize>, max_repeting_games_per_player: usize) -> Self {
         Self {
             max_repeting_games_per_player,
@@ -45,166 +50,119 @@ impl TtPlaythrough {
         }
     }
 
-    pub fn get_next_match(&mut self) -> Result<TtMatch, String> {
-        if self.matches.is_empty() {
-            let first_to_play = TtMatch::new(self.players[0], self.players[1]);
-            self.matches.push(first_to_play.clone());
+    pub fn log_matches_so_far(&self) {
+        let formatted_matches = self
+            .matches
+            .iter()
+            .fold("".to_string(), |acc, m| acc + &format!("{m}\n"));
 
-            Ok(first_to_play)
-        } else {
-            let next_match = self.get_next_possible()?;
-            self.matches.push(next_match.clone());
-            Ok(next_match)
+        log::info!(
+            "MATCHES: \n{}\n\ntotal: {}",
+            formatted_matches,
+            self.matches.len()
+        );
+    }
+
+    //
+    // public interface
+    //
+    pub fn play_match_if_possible(&mut self, players: (usize, usize)) {
+        if self.check_match_possible(players) {
+            self.append_game(players.0, players.1);
         }
     }
 
     pub fn check_match_possible(&mut self, players: (usize, usize)) -> bool {
-        let match_possible = self.check_not_played_twice_before(players);
-        if match_possible {
-            self.matches.push(TtMatch::new(players.0, players.1));
+        // Rule 1: don't play same players
+        self.check_same_players_as_before(players)
+
+            // Rule 2: don't play three times in a row
+            && self.check_not_played_twice_before(players)
+
+            // Rule 3: don't play on the same side of the table
+            && self.check_correct_side_of_table(players)
+    }
+
+    //
+    // internal methods
+    //
+
+    /// Rule 1: don't play same players
+    fn check_same_players_as_before(&self, players: (usize, usize)) -> bool {
+        if let Some(last_match) = self.matches.last() {
+            last_match.check_same_players(&players.0, &players.1)
+        } else {
+            true
         }
-
-        match_possible
-        // && self.check_correct_side_of_table(players)
     }
 
-    fn get_next_possible(&self) -> Result<TtMatch, String> {
-        let possible_players = self.get_not_played_twice_before()?;
-        let possible_players = self.get_correct_side_of_table(possible_players)?;
-
-        Ok(TtMatch::new(possible_players.0, possible_players.1))
-    }
-
+    /// Rule 2: don't play three times in a row
     fn check_not_played_twice_before(&self, players: (usize, usize)) -> bool {
-        let last_n_matches = self.get_last_n_matches();
-
-        let mut players_map = self.get_empty_player_map();
+        let players_map = self.get_last_n_games_counts();
 
         log::debug!(
             "Checking last {} games: {:?}",
             self.max_repeting_games_per_player,
-            &last_n_matches
+            &players_map
         );
 
-        for m in last_n_matches {
-            {
-                let count_left = players_map
-                    .entry(m.left)
-                    .and_modify(|p| *p += 1)
-                    .or_insert(0);
+        if players_map.get(&players.0).unwrap_or(&0).to_owned()
+            >= self.max_repeting_games_per_player
+        {
+            log::debug!(
+                "Player {} played {} times in the last {} games already.",
+                players.0,
+                players_map.get(&players.0).unwrap_or(&0),
+                self.max_repeting_games_per_player,
+            );
+            return false;
+        }
 
-                if *count_left >= self.max_repeting_games_per_player {
-                    log::debug!(
-                        "Player {} played {} times in the last {} games already.",
-                        m.left,
-                        count_left,
-                        self.max_repeting_games_per_player,
-                    );
-                    return false;
-                }
-            }
-
-            let count_right = players_map
-                .entry(m.right)
-                .and_modify(|p| *p += 1)
-                .or_insert(0);
-
-            if *count_right >= self.max_repeting_games_per_player {
-                log::debug!(
-                    "Player {} played {} times in the last {} games already.",
-                    m.right,
-                    count_right,
-                    self.max_repeting_games_per_player,
-                );
-                return false;
-            }
+        if players_map.get(&players.1).unwrap_or(&0).to_owned()
+            >= self.max_repeting_games_per_player
+        {
+            log::debug!(
+                "Player {} played {} times in the last {} games already.",
+                players.1,
+                players_map.get(&players.1).unwrap_or(&0),
+                self.max_repeting_games_per_player,
+            );
+            return false;
         }
 
         true
     }
 
+    /// Rule 3: don't play on the same side of the table
     fn check_correct_side_of_table(&self, players: (usize, usize)) -> bool {
+        if let Some(last_match) = self.matches.last() {
+            if last_match.left == players.0 {
+                return false;
+            } else if last_match.right == players.1 {
+                return false;
+            }
+        };
+
         true
     }
 
-    /// Rule 2: players cannot play 3 times in a row
-    fn get_not_played_twice_before(&self) -> Result<(usize, usize), String> {
+    fn get_last_n_games_counts(&self) -> BTreeMap<usize, usize> {
         let last_n_matches = self.get_last_n_matches();
-
         let mut players_map = self.get_empty_player_map();
 
         for m in last_n_matches {
-            let left = players_map.get(&m.left).unwrap_or(&0);
-            let new_left = left + 1;
+            players_map
+                .entry(m.left)
+                .and_modify(|p| *p += 1)
+                .or_insert(0);
 
-            let right = players_map.get(&m.right).unwrap_or(&0);
-            let new_right = right + 1;
-
-            players_map.remove(&m.left);
-            players_map.insert(m.left, new_left);
-
-            players_map.remove(&m.right);
-            players_map.insert(m.right, new_right.clone());
+            players_map
+                .entry(m.right)
+                .and_modify(|p| *p += 1)
+                .or_insert(0);
         }
 
-        let possible_players: Vec<usize> = self
-            .players
-            .clone()
-            .into_iter()
-            .filter(|p| {
-                players_map.get(p).unwrap_or(&0) <= &self.max_repeting_games_per_player
-            })
-            .collect();
-
-        if possible_players.len() < 2 {
-            Err(format!(
-                "Could not find any possible players. \
-Last {} players had the following numbers of games: {:#?}",
-                self.max_repeting_games_per_player, players_map,
-            ))
-        } else if possible_players.len() == 2 {
-            Ok((possible_players[0], possible_players[1]))
-        } else {
-            let possible_players: Vec<usize> = players_map
-                .into_iter()
-                .sorted_by(|a, b| Ord::cmp(&a.1, &b.1))
-                .map(|(p, _)| p)
-                .take(2)
-                .collect();
-
-            let mut rng = rand::thread_rng();
-            let first_idx: bool = rng.gen_bool(0.5);
-
-            if first_idx {
-                Ok((possible_players[0], possible_players[1]))
-            } else {
-                Ok((possible_players[1], possible_players[0]))
-            }
-        }
-    }
-
-    /// Rule 3: players should swich places on the tabel e.g.
-    fn get_correct_side_of_table(
-        &self,
-        players: (usize, usize),
-    ) -> Result<(usize, usize), String> {
-        if let Some(last_match) = self.matches.last() {
-            // sanity check
-            let player1 = players.0;
-            let player2 = players.1;
-
-            last_match.forbit_same_players(&player1, &player2)?;
-
-            if last_match.left == player1 {
-                Ok((player2, player1))
-            } else if last_match.left == player2 {
-                Ok((player1, player2))
-            } else {
-                Ok((player1, player2))
-            }
-        } else {
-            Ok(players)
-        }
+        players_map
     }
 
     fn get_last_n_matches(&self) -> Vec<TtMatch> {
@@ -244,6 +202,18 @@ mod tests {
     const TEST_PLAYERS: [usize; 3] = [0, 1, 2];
 
     #[test]
+    fn test_forbit_same_players() {
+        let tt_match = TtMatch::new(1, 2);
+
+        assert_eq!(tt_match.check_same_players(&0, &1), true);
+        assert_eq!(tt_match.check_same_players(&0, &2), true);
+        assert_eq!(tt_match.check_same_players(&1, &0), true);
+        assert_eq!(tt_match.check_same_players(&2, &0), true);
+        assert_eq!(tt_match.check_same_players(&1, &2), false);
+        assert_eq!(tt_match.check_same_players(&2, &1), false);
+    }
+
+    #[test]
     fn test_get_empty_player_map() {
         let playthrough = TtPlaythrough::new(TEST_PLAYERS.into(), 2);
 
@@ -280,5 +250,122 @@ mod tests {
         assert!(last_n_matches.len() < 3);
         assert_eq!(last_n_matches[0], TtMatch::new(1, 2));
         assert_eq!(last_n_matches[1], TtMatch::new(1, 0));
+    }
+
+    #[test]
+    fn test_get_last_n_games_counts() {
+        let mut playthrough = TtPlaythrough::new(TEST_PLAYERS.into(), 2);
+
+        playthrough.append_game(0, 1);
+        playthrough.append_game(0, 2);
+
+        let counts = playthrough.get_last_n_games_counts();
+        assert_eq!(counts.get(&0).unwrap().to_owned(), 2);
+        assert_eq!(counts.get(&1).unwrap().to_owned(), 1);
+        assert_eq!(counts.get(&2).unwrap().to_owned(), 1);
+
+        playthrough.append_game(1, 2);
+
+        let counts = playthrough.get_last_n_games_counts();
+        assert_eq!(counts.get(&0).unwrap().to_owned(), 1);
+        assert_eq!(counts.get(&1).unwrap().to_owned(), 1);
+        assert_eq!(counts.get(&2).unwrap().to_owned(), 2);
+
+        playthrough.append_game(1, 0);
+
+        let counts = playthrough.get_last_n_games_counts();
+        assert_eq!(counts.get(&0).unwrap().to_owned(), 1);
+        assert_eq!(counts.get(&1).unwrap().to_owned(), 2);
+        assert_eq!(counts.get(&2).unwrap().to_owned(), 1);
+    }
+
+    #[test]
+    fn test_check_same_players_as_before() {
+        let mut playthrough = TtPlaythrough::new(TEST_PLAYERS.into(), 2);
+
+        playthrough.append_game(0, 1);
+        playthrough.append_game(0, 2);
+
+        assert_eq!(playthrough.check_same_players_as_before((0, 1)), true);
+        assert_eq!(playthrough.check_same_players_as_before((0, 2)), false);
+        assert_eq!(playthrough.check_same_players_as_before((1, 0)), true);
+        assert_eq!(playthrough.check_same_players_as_before((2, 0)), false);
+        assert_eq!(playthrough.check_same_players_as_before((1, 2)), true);
+        assert_eq!(playthrough.check_same_players_as_before((2, 1)), true);
+    }
+
+    #[test]
+    fn test_correct_side_of_table() {
+        let mut playthrough = TtPlaythrough::new(TEST_PLAYERS.into(), 2);
+
+        playthrough.append_game(0, 1);
+        playthrough.append_game(0, 2);
+
+        assert_eq!(playthrough.check_correct_side_of_table((0, 1)), false);
+        assert_eq!(playthrough.check_correct_side_of_table((0, 2)), false);
+        assert_eq!(playthrough.check_correct_side_of_table((1, 0)), true);
+        assert_eq!(playthrough.check_correct_side_of_table((2, 0)), true);
+        assert_eq!(playthrough.check_correct_side_of_table((1, 2)), false);
+        assert_eq!(playthrough.check_correct_side_of_table((2, 1)), true);
+    }
+
+    #[test]
+    fn test_check_not_played_twice_before() {
+        let mut playthrough = TtPlaythrough::new(TEST_PLAYERS.into(), 2);
+
+        playthrough.append_game(0, 1);
+        playthrough.append_game(0, 2);
+
+        assert_eq!(playthrough.check_not_played_twice_before((0, 1)), false);
+        assert_eq!(playthrough.check_not_played_twice_before((0, 2)), false);
+        assert_eq!(playthrough.check_not_played_twice_before((1, 0)), false);
+        assert_eq!(playthrough.check_not_played_twice_before((2, 0)), false);
+        assert_eq!(playthrough.check_not_played_twice_before((1, 2)), true);
+        assert_eq!(playthrough.check_not_played_twice_before((2, 1)), true);
+
+        playthrough.append_game(1, 2);
+
+        assert_eq!(playthrough.check_not_played_twice_before((0, 1)), true);
+        assert_eq!(playthrough.check_not_played_twice_before((0, 2)), false);
+        assert_eq!(playthrough.check_not_played_twice_before((1, 0)), true);
+        assert_eq!(playthrough.check_not_played_twice_before((2, 0)), false);
+        assert_eq!(playthrough.check_not_played_twice_before((1, 2)), false);
+        assert_eq!(playthrough.check_not_played_twice_before((2, 1)), false);
+    }
+
+    #[test]
+    fn test_check_matches_possible() {
+        let mut playthrough = TtPlaythrough::new(TEST_PLAYERS.into(), 2);
+
+        assert_eq!(playthrough.check_match_possible((0, 1)), true);
+        assert_eq!(playthrough.check_match_possible((0, 2)), true);
+        assert_eq!(playthrough.check_match_possible((1, 0)), true);
+        assert_eq!(playthrough.check_match_possible((2, 0)), true);
+        assert_eq!(playthrough.check_match_possible((1, 2)), true);
+        assert_eq!(playthrough.check_match_possible((2, 1)), true);
+
+        playthrough.append_game(2, 1);
+        assert_eq!(playthrough.check_match_possible((0, 1)), false); // same side
+        assert_eq!(playthrough.check_match_possible((0, 2)), true);
+        assert_eq!(playthrough.check_match_possible((1, 0)), true);
+        assert_eq!(playthrough.check_match_possible((2, 0)), false); // same side
+        assert_eq!(playthrough.check_match_possible((1, 2)), false); // same players
+        assert_eq!(playthrough.check_match_possible((2, 1)), false); // same players
+
+        playthrough.append_game(0, 2);
+        assert_eq!(playthrough.check_match_possible((0, 1)), false); // same side
+        assert_eq!(playthrough.check_match_possible((0, 2)), false); // same players
+        assert_eq!(playthrough.check_match_possible((1, 0)), true);
+        assert_eq!(playthrough.check_match_possible((2, 0)), false); // same players
+        assert_eq!(playthrough.check_match_possible((1, 2)), false); // same side
+        assert_eq!(playthrough.check_match_possible((2, 1)), false); // played twice alredy
+
+        playthrough.append_game(1, 0);
+        assert_eq!(playthrough.check_match_possible((0, 1)), false);
+        assert_eq!(playthrough.check_match_possible((0, 2)), false);
+        assert_eq!(playthrough.check_match_possible((1, 0)), false);
+        assert_eq!(playthrough.check_match_possible((2, 0)), false);
+        assert_eq!(playthrough.check_match_possible((1, 2)), false);
+        assert_eq!(playthrough.check_match_possible((2, 1)), true);
     }
 }
